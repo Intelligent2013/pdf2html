@@ -1,30 +1,14 @@
 package org.example;
 
-import com.aspose.cells.Workbook;
-import com.aspose.cells.Worksheet;
-import com.aspose.cells.WorksheetCollection;
+import com.aspose.cells.*;
 import com.aspose.pdf.*;
-import org.apache.pdfbox.contentstream.operator.Operator;
-import org.apache.pdfbox.cos.*;
-import org.apache.pdfbox.pdfparser.PDFStreamParser;
-import org.apache.pdfbox.pdfwriter.ContentStreamWriter;
+import org.apache.pdfbox.multipdf.Splitter;
 import org.apache.pdfbox.pdmodel.PDDocument;
-import org.apache.pdfbox.pdmodel.PDPage;
-import org.apache.pdfbox.pdmodel.PDPageContentStream;
-import org.apache.pdfbox.pdmodel.PDPageTree;
-import org.apache.pdfbox.pdmodel.common.PDStream;
-import org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement;
-import org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureTreeRoot;
-import org.apache.pdfbox.pdmodel.font.PDCIDFont;
-import org.apache.pdfbox.pdmodel.font.PDFont;
-import org.apache.pdfbox.pdmodel.font.PDFontDescriptor;
-import org.apache.pdfbox.pdmodel.font.PDType0Font;
-import org.apache.pdfbox.text.PDFTextStripper;
-import org.apache.commons.lang3.StringEscapeUtils;
-
+import org.jsoup.Jsoup;
+import org.jsoup.select.Elements;
 import java.io.*;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
-
 
 /*
 Converter from PDF to HTML.
@@ -40,19 +24,9 @@ public class Pdf2Html {
 
     private static final int ERROR_EXIT_CODE = -1;
 
-    private static StringBuilder nodesTree = new StringBuilder();
-
-    private static long currMCID = -1;
-
-    private static StringBuilder currText = new StringBuilder();
-
-    private static Float currX = 0.0f;
-    private static Map<Long, TextBlock> textMap = new HashMap<>();
-
-
     public static void main(String[] args) throws Exception {
 
-        if (args.length == 0 || args.length > 2) {
+        if (args.length == 0 || args.length > 3) {
             System.out.println(USAGE);
             System.exit(ERROR_EXIT_CODE);
         }
@@ -73,162 +47,112 @@ public class Pdf2Html {
         } catch (Exception ex){ };
 
         if (outputFile.isEmpty()) {
-            outputFile = pathInputPDF.substring(0, pathInputPDF.lastIndexOf("."));
-            outputFile = outputFile + ".html";
+            outputFile = pathInputPDF.substring(0, pathInputPDF.lastIndexOf(".")) + ".html";
         }
-        File fOutputHTML = new File (outputFile);
+        File fOutputFile = new File (outputFile);
 
-        process(fInputPDF, fOutputHTML);
+        process(fInputPDF, fOutputFile);
     }
 
     private static void process(File fin, File fout) throws Exception {
 
-        if (1 == 2) {
-            try (PDDocument doc = PDDocument.load(fin)) {
+        ArrayList<byte[]> htmlPages = new ArrayList<>();
 
-                // read text strings
-                PDPageTree pages = doc.getDocumentCatalog().getPages();
-                for (PDPage page : pages) {
-                    PDFStreamParser parser = new PDFStreamParser(page);
-                    parser.parse();
-                    List tokens = parser.getTokens();
+        // open PDF in Apache PDFBox
+        try (PDDocument doc = PDDocument.load(fin)) {
 
-                    for (int i = 0; i < tokens.size(); i++) {
-                        Object next = tokens.get(i);
-                        if (next instanceof Operator) {
-                            Operator op = (Operator) next;
-                            switch (op.getName()) {
-                                case "BDC":
-                                    COSDictionary previous = (COSDictionary) tokens.get(i - 1);
-                                    for (Map.Entry<COSName, COSBase> cosNameCOSBaseEntry : previous.entrySet()) {
-                                        if (cosNameCOSBaseEntry.getKey().getName().toString().equals("MCID")) {
-                                            if (cosNameCOSBaseEntry.getValue() instanceof COSInteger) {
-                                                currMCID = ((COSInteger) cosNameCOSBaseEntry.getValue()).longValue();
-                                            }
-                                        }
-                                    }
-                                    break;
-                                case "BT":
-                                    //BT: Begin Text.
-                                    currText.setLength(0);
-                                    break;
-                                case "TJ":
-                                    COSArray previousTest = (COSArray) tokens.get(i - 1);
-                                    for (int k = 0; k < previousTest.size(); k++) {
-                                        Object arrElement = previousTest.getObject(k);
-                                        if (arrElement instanceof COSString) {
-                                            COSString cosString = (COSString) arrElement;
-                                            currText.append(cosString.getString());
-                                        }
-                                    }
-                                    break;
-                                case "Tm":
-                                    COSFloat previousTmX = (COSFloat) tokens.get(i - 2);
-                                    currX = previousTmX.floatValue();
-                                    break;
-                                case "Tj":
-                                    System.out.println("Tj processing missing");
-                                    break;
-                                case "ET":
-                                    //ET: End Text.
-                                    textMap.put(currMCID, new TextBlock(currText.toString(), currX));
-                                    break;
-                            }
-                        }
-                    }
-                } // end text reading
+            Splitter splitter = new Splitter();
+            List<PDDocument> Pages = splitter.split(doc);
+            Iterator<PDDocument> iterator = Pages.listIterator();
 
+            // iterate for each page
+            while (iterator.hasNext()) {
 
-                PDStructureTreeRoot structureTreeRoot = doc.getDocumentCatalog().getStructureTreeRoot();
-                if (structureTreeRoot != null) {
-                    COSBase entryK = structureTreeRoot.getK();
-                    buildTree(entryK);
+                // save page by PDFBox
+                PDDocument pdocOnePage = iterator.next();
+                ByteArrayOutputStream baosOnePage = new ByteArrayOutputStream();
+                pdocOnePage.save(baosOnePage);
+
+                // open page by Aspose.PDF
+                byte[] pdfPage = baosOnePage.toByteArray();
+                ByteArrayInputStream baisOnePage = new ByteArrayInputStream(pdfPage);
+                Document document = new Document(baisOnePage);
+
+                // convert to XLSX, then to HTML
+                ExcelSaveOptions excelSave = new ExcelSaveOptions();
+                excelSave.setFormat(ExcelSaveOptions.ExcelFormat.XLSX);
+
+                ByteArrayOutputStream baosExcelStream = new ByteArrayOutputStream();
+                document.save(baosExcelStream, excelSave);
+
+                byte[] excelResult = baosExcelStream.toByteArray();
+
+                ByteArrayInputStream baisExcelStream = new ByteArrayInputStream(excelResult);
+
+                Workbook workbook = new Workbook(baisExcelStream);
+
+                int sheetCount = workbook.getWorksheets().getCount();
+
+                WorksheetCollection sheets = workbook.getWorksheets();
+                // Take Pdfs of each sheet
+                for (int j = 0; j < sheetCount; j++) {
+                    Worksheet ws = workbook.getWorksheets().get(j);
+
+                    sheets.setActiveSheetIndex(j);
+
+                    com.aspose.cells.HtmlSaveOptions htmlSaveOptions = new com.aspose.cells.HtmlSaveOptions();
+                    htmlSaveOptions.setExportActiveWorksheetOnly(true);
+                    htmlSaveOptions.setExportImagesAsBase64(true);
+
+                    //String outHTMLFilename = fout.getAbsolutePath().replace(".html", "_table" + j + ".html");
+
+                    ByteArrayOutputStream baosHTMLStream = new ByteArrayOutputStream();
+                    workbook.save(baosHTMLStream, htmlSaveOptions);
+
+                    byte[] excelHTML = baosHTMLStream.toByteArray();
+                    htmlPages.add(excelHTML);
                 }
-
             }
+            mergeHTMLs(htmlPages, fout);
         }
-
-        if (nodesTree.length() == -1) { //!= 0
-            BufferedWriter writer = new BufferedWriter(new FileWriter(fout.getAbsoluteFile()));
-            writer.write(nodesTree.toString());
-            writer.close();
-        } else {
-
-            // convert to XLSX, then to HTML
-            Document document = new Document(fin.getAbsolutePath());
-            ExcelSaveOptions excelSave = new ExcelSaveOptions();
-            excelSave.setFormat(ExcelSaveOptions.ExcelFormat.XLSX);
-
-            ByteArrayOutputStream dstStream = new ByteArrayOutputStream();
-
-            //document.save("temp.xlsx", excelSave);
-            document.save(dstStream, excelSave);
-
-            byte[] excelResult = dstStream.toByteArray();
-
-            ByteArrayInputStream inStream = new ByteArrayInputStream(excelResult);
-
-            //Workbook workbook = new Workbook("temp.xlsx");
-            Workbook workbook = new Workbook(inStream);
-
-            int sheetCount = workbook.getWorksheets().getCount();
-
-            WorksheetCollection sheets = workbook.getWorksheets();
-            // Take Pdfs of each sheet
-            for (int j = 0; j < sheetCount; j++) {
-                Worksheet ws = workbook.getWorksheets().get(j);
-
-                sheets.setActiveSheetIndex(j);
-
-                com.aspose.cells.HtmlSaveOptions htmlSaveOptions = new com.aspose.cells.HtmlSaveOptions();
-                htmlSaveOptions.setExportActiveWorksheetOnly(true);
-                htmlSaveOptions.setExportImagesAsBase64(true);
-
-                String outHTMLFilename = fout.getAbsolutePath().replace(".html", "table" + j + ".html");
-                workbook.save(outHTMLFilename, htmlSaveOptions);
-            }
-        }
-    }
-
-    private static void buildTree (COSBase node) {
-        if (node instanceof COSInteger) {
-            long id = ((COSInteger) node).longValue();
-            TextBlock tb =textMap.get(id);
-            if (tb != null) {
-                updateTree("<x hidden=\"true\">" + tb.getX() + "</x>");
-                updateTree(tb.getText());
-            }
-            return;
-        }
-        COSArray cosArray = (COSArray) node.getCOSObject();
-        for (int i = 0; i < cosArray.size(); i++) {
-            COSBase cosBase = cosArray.get(i);
-            if (cosBase instanceof COSInteger) {
-                buildTree(cosBase);
-                return;
-            }
-            COSObject cosObject = (COSObject) cosBase;
-
-            COSName cosName = (COSName)cosObject.getItem(COSName.S);
-            String elementName = cosName.getName();
-
-            updateTree("<" + elementName + ">");
-
-            buildTree(cosObject.getItem(COSName.K));
-
-            updateTree("</" + elementName + ">");
-        }
-    }
-
-    private static void updateTree(String s) {
-        //System.out.println(s);
-        nodesTree.append(s);
     }
 
     private static String getUsage() {
         StringBuilder sb = new StringBuilder();
         sb.append("java -jar " + APP_NAME + ".jar <input PDF file path> [output HTML file path]");
         return sb.toString();
+    }
+
+
+    private static void mergeHTMLs(ArrayList<byte[]> htmlPages, File fout) {
+        // write first HTML
+        if (!htmlPages.isEmpty()) {
+            try (FileOutputStream outputStream = new FileOutputStream(fout)) {
+                outputStream.write(htmlPages.get(0));
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+
+            try {
+                // append 'table' from 2nd, 3rd, 4th, etc. html
+                for (int i = 1; i < htmlPages.size(); i++) {
+                    FileWriter fw = new FileWriter(fout.getAbsolutePath(), true);
+                    byte[] htmlContent = htmlPages.get(i);
+
+                    String htmlString = new String(htmlContent, StandardCharsets.UTF_8);
+
+                    org.jsoup.nodes.Document doc = Jsoup.parse(htmlString);
+
+                    Elements tables = doc.select("table");
+
+                    fw.write("<h3>Page " + i + ".</h3>");
+                    fw.write(tables.toString());
+                    fw.close();
+                }
+            } catch (IOException ioe) {
+                throw new RuntimeException(ioe);
+            }
+        }
     }
 
 }
