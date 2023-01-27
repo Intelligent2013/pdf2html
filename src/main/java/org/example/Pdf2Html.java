@@ -78,6 +78,8 @@ public class Pdf2Html {
                 ByteArrayInputStream baisOnePage = new ByteArrayInputStream(pdfPage);
                 Document document = new Document(baisOnePage);
 
+                document.getPages().get_Item(1).getResources().getImages().delete();
+
                 // convert to XLSX, then to HTML
                 ExcelSaveOptions excelSave = new ExcelSaveOptions();
                 excelSave.setFormat(ExcelSaveOptions.ExcelFormat.XLSX);
